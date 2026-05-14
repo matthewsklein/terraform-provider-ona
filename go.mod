@@ -1,6 +1,6 @@
 module github.com/combor/terraform-provider-ona
 
-go 1.26.2
+go 1.26.3
 
 require (
 	github.com/gitpod-io/gitpod-sdk-go v0.13.0
