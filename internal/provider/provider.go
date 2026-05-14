@@ -182,6 +182,7 @@ func (p *onaProvider) DataSources(_ context.Context) []func() datasource.DataSou
 		NewRunnerEnvironmentClassesDataSource,
 		NewRunnerDataSource,
 		NewRunnersDataSource,
+		NewRunnerTokenDataSource,
 	}
 }
 

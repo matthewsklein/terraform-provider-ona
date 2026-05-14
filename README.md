@@ -28,6 +28,7 @@ Terraform provider for managing [Gitpod](https://gitpod.io) resources on [ona.co
 - [Groups Data Source Docs](https://github.com/combor/terraform-provider-ona/blob/main/docs/data-sources/groups.md)
 - [Runner Environment Classes Data Source Docs](https://github.com/combor/terraform-provider-ona/blob/main/docs/data-sources/runner_environment_classes.md)
 - [Runners Data Source Docs](https://github.com/combor/terraform-provider-ona/blob/main/docs/data-sources/runners.md)
+- [Runner Token Data Source Docs](https://github.com/combor/terraform-provider-ona/blob/main/docs/data-sources/runner_token.md)
 - [Integration Example](https://github.com/combor/terraform-provider-ona/blob/main/examples/main.tf)
 
 ## Supported Types
@@ -48,6 +49,7 @@ Data sources:
 - `ona_runner`
 - `ona_runner_environment_classes`
 - `ona_runners`
+- `ona_runner_token`
 
 ## Using the Provider
 

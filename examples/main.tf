@@ -37,6 +37,10 @@ data "ona_runner" "example" {
   id = ona_runner.example.id
 }
 
+data "ona_runner_token" "example" {
+  runner_id = ona_runner.example.id
+}
+
 data "ona_runner_environment_classes" "example" {
   runner_id = ona_runner.example.id
 }
