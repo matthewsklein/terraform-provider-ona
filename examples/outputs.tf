@@ -6,6 +6,10 @@ output "runner_environment_class_ids" {
   value = [for environment_class in data.ona_runner_environment_classes.example.environment_classes : environment_class.id]
 }
 
+output "runner_environment_class_id" {
+  value = ona_runner_environment_class.example.id
+}
+
 output "project_id" {
   value = ona_project.example.id
 }

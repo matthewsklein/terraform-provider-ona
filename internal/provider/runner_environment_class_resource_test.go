@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"github.com/gitpod-io/gitpod-sdk-go/shared"
-	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -23,29 +22,18 @@ func TestMapEnvironmentClassToModel_AWSEC2Configuration(t *testing.T) {
 		Enabled: true,
 	}
 
-	got, diags := mapEnvironmentClassToModel(environmentClass)
+	got := mapEnvironmentClassToModel(environmentClass)
 
-	require.False(t, diags.HasError())
 	assert.Equal(t, "env-class-aws-ec2", got.ID.ValueString())
 	assert.Equal(t, "runner-aws-ec2", got.RunnerID.ValueString())
 	assert.Equal(t, "Large", got.DisplayName.ValueString())
 	assert.Equal(t, "8 vCPU / 32 GiB / 200 GiB disk", got.Description.ValueString())
 	assert.True(t, got.Enabled.ValueBool())
 
-	config := got.Configuration.Elements()
-	assert.Len(t, config, 3)
-
-	instanceType, ok := config["instanceType"].(types.String)
-	require.True(t, ok)
-	assert.Equal(t, "m6i.2xlarge", instanceType.ValueString())
-
-	diskSizeGB, ok := config["diskSizeGB"].(types.String)
-	require.True(t, ok)
-	assert.Equal(t, "200", diskSizeGB.ValueString())
-
-	spot, ok := config["spot"].(types.String)
-	require.True(t, ok)
-	assert.Equal(t, "false", spot.ValueString())
+	require.NotNil(t, got.Configuration)
+	assert.Equal(t, "m6i.2xlarge", got.Configuration.InstanceType.ValueString())
+	assert.Equal(t, int64(200), got.Configuration.DiskSizeGB.ValueInt64())
+	assert.False(t, got.Configuration.Spot.ValueBool())
 }
 
 func TestMapEnvironmentClassToModel_EmptyOptionalFields(t *testing.T) {
@@ -58,15 +46,14 @@ func TestMapEnvironmentClassToModel_EmptyOptionalFields(t *testing.T) {
 		Enabled:       false,
 	}
 
-	got, diags := mapEnvironmentClassToModel(environmentClass)
+	got := mapEnvironmentClassToModel(environmentClass)
 
-	require.False(t, diags.HasError())
 	assert.Equal(t, "env-class-789", got.ID.ValueString())
 	assert.Equal(t, "runner-abc", got.RunnerID.ValueString())
 	assert.True(t, got.DisplayName.IsNull())
 	assert.True(t, got.Description.IsNull())
 	assert.False(t, got.Enabled.ValueBool())
-	assert.Empty(t, got.Configuration.Elements())
+	assert.Nil(t, got.Configuration)
 }
 
 func TestMapEnvironmentClassToModel_MinimalConfiguration(t *testing.T) {
@@ -79,18 +66,15 @@ func TestMapEnvironmentClassToModel_MinimalConfiguration(t *testing.T) {
 		Enabled: true,
 	}
 
-	got, diags := mapEnvironmentClassToModel(environmentClass)
+	got := mapEnvironmentClassToModel(environmentClass)
 
-	require.False(t, diags.HasError())
 	assert.Equal(t, "env-class-minimal", got.ID.ValueString())
 	assert.Equal(t, "runner-aws-ec2", got.RunnerID.ValueString())
 
-	config := got.Configuration.Elements()
-	assert.Len(t, config, 1)
-
-	instanceType, ok := config["instanceType"].(types.String)
-	require.True(t, ok)
-	assert.Equal(t, "t3.medium", instanceType.ValueString())
+	require.NotNil(t, got.Configuration)
+	assert.Equal(t, "t3.medium", got.Configuration.InstanceType.ValueString())
+	assert.True(t, got.Configuration.DiskSizeGB.IsNull())
+	assert.True(t, got.Configuration.Spot.IsNull())
 }
 
 func TestMapEnvironmentClassToModel_DisabledClass(t *testing.T) {
@@ -105,11 +89,12 @@ func TestMapEnvironmentClassToModel_DisabledClass(t *testing.T) {
 		Enabled: false,
 	}
 
-	got, diags := mapEnvironmentClassToModel(environmentClass)
+	got := mapEnvironmentClassToModel(environmentClass)
 
-	require.False(t, diags.HasError())
 	assert.Equal(t, "env-class-disabled", got.ID.ValueString())
 	assert.False(t, got.Enabled.ValueBool())
+	require.NotNil(t, got.Configuration)
+	assert.Equal(t, "t3.micro", got.Configuration.InstanceType.ValueString())
 }
 
 func TestMapEnvironmentClassToModel_AWSEC2SpotInstance(t *testing.T) {
@@ -126,20 +111,17 @@ func TestMapEnvironmentClassToModel_AWSEC2SpotInstance(t *testing.T) {
 		Enabled: true,
 	}
 
-	got, diags := mapEnvironmentClassToModel(environmentClass)
+	got := mapEnvironmentClassToModel(environmentClass)
 
-	require.False(t, diags.HasError())
 	assert.Equal(t, "env-class-aws-spot", got.ID.ValueString())
 	assert.Equal(t, "runner-aws-ec2", got.RunnerID.ValueString())
 	assert.Equal(t, "Large Spot", got.DisplayName.ValueString())
 	assert.True(t, got.Enabled.ValueBool())
 
-	config := got.Configuration.Elements()
-	assert.Len(t, config, 3)
-
-	spot, ok := config["spot"].(types.String)
-	require.True(t, ok)
-	assert.Equal(t, "true", spot.ValueString())
+	require.NotNil(t, got.Configuration)
+	assert.Equal(t, "m7i.8xlarge", got.Configuration.InstanceType.ValueString())
+	assert.Equal(t, int64(200), got.Configuration.DiskSizeGB.ValueInt64())
+	assert.True(t, got.Configuration.Spot.ValueBool())
 }
 
 func TestMapEnvironmentClassToModel_EmptyConfiguration(t *testing.T) {
@@ -151,10 +133,9 @@ func TestMapEnvironmentClassToModel_EmptyConfiguration(t *testing.T) {
 		Enabled:       true,
 	}
 
-	got, diags := mapEnvironmentClassToModel(environmentClass)
+	got := mapEnvironmentClassToModel(environmentClass)
 
-	require.False(t, diags.HasError())
-	assert.Empty(t, got.Configuration.Elements())
+	assert.Nil(t, got.Configuration)
 }
 
 func TestMapEnvironmentClassToModel_NullDescription(t *testing.T) {
@@ -164,16 +145,17 @@ func TestMapEnvironmentClassToModel_NullDescription(t *testing.T) {
 		DisplayName: "Has Name",
 		Description: "",
 		Configuration: []shared.FieldValue{
-			{Key: "type", Value: "standard"},
+			{Key: "instanceType", Value: "t3.medium"},
 		},
 		Enabled: true,
 	}
 
-	got, diags := mapEnvironmentClassToModel(environmentClass)
+	got := mapEnvironmentClassToModel(environmentClass)
 
-	require.False(t, diags.HasError())
 	assert.Equal(t, "Has Name", got.DisplayName.ValueString())
 	assert.True(t, got.Description.IsNull())
+	require.NotNil(t, got.Configuration)
+	assert.Equal(t, "t3.medium", got.Configuration.InstanceType.ValueString())
 }
 
 func TestMapEnvironmentClassToModel_ManagedRunner(t *testing.T) {
@@ -190,28 +172,17 @@ func TestMapEnvironmentClassToModel_ManagedRunner(t *testing.T) {
 		Enabled: true,
 	}
 
-	got, diags := mapEnvironmentClassToModel(environmentClass)
+	got := mapEnvironmentClassToModel(environmentClass)
 
-	require.False(t, diags.HasError())
 	assert.Equal(t, "env-class-managed", got.ID.ValueString())
 	assert.Equal(t, "runner-managed", got.RunnerID.ValueString())
 	assert.Equal(t, "Regular", got.DisplayName.ValueString())
 	assert.Equal(t, "4 vCPU / 16 GiB / 80 GiB disk", got.Description.ValueString())
 
-	config := got.Configuration.Elements()
-	assert.Len(t, config, 3)
-
-	instanceType, ok := config["instanceType"].(types.String)
-	require.True(t, ok)
-	assert.Equal(t, "m6i.xlarge", instanceType.ValueString())
-
-	diskSizeGB, ok := config["diskSizeGB"].(types.String)
-	require.True(t, ok)
-	assert.Equal(t, "80", diskSizeGB.ValueString())
-
-	spot, ok := config["spot"].(types.String)
-	require.True(t, ok)
-	assert.Equal(t, "false", spot.ValueString())
+	require.NotNil(t, got.Configuration)
+	assert.Equal(t, "m6i.xlarge", got.Configuration.InstanceType.ValueString())
+	assert.Equal(t, int64(80), got.Configuration.DiskSizeGB.ValueInt64())
+	assert.False(t, got.Configuration.Spot.ValueBool())
 }
 
 func TestMapEnvironmentClassToModel_ArbitraryKeysAccepted(t *testing.T) {
@@ -228,23 +199,15 @@ func TestMapEnvironmentClassToModel_ArbitraryKeysAccepted(t *testing.T) {
 		Enabled: true,
 	}
 
-	got, diags := mapEnvironmentClassToModel(environmentClass)
+	got := mapEnvironmentClassToModel(environmentClass)
 
-	require.False(t, diags.HasError())
-	config := got.Configuration.Elements()
-	assert.Len(t, config, 3)
+	require.NotNil(t, got.Configuration)
 
-	// Valid key
-	instanceType, ok := config["instanceType"].(types.String)
-	require.True(t, ok)
-	assert.Equal(t, "t3.medium", instanceType.ValueString())
+	// Valid key is mapped
+	assert.Equal(t, "t3.medium", got.Configuration.InstanceType.ValueString())
 
-	// Arbitrary keys are stored but have no effect
-	customKey, ok := config["customKey"].(types.String)
-	require.True(t, ok)
-	assert.Equal(t, "customValue", customKey.ValueString())
-
-	anotherKey, ok := config["anotherKey"].(types.String)
-	require.True(t, ok)
-	assert.Equal(t, "anotherValue", anotherKey.ValueString())
+	// Arbitrary keys are silently ignored by the mapping function
+	// They are not part of the typed configuration model
+	assert.True(t, got.Configuration.DiskSizeGB.IsNull())
+	assert.True(t, got.Configuration.Spot.IsNull())
 }

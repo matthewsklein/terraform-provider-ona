@@ -2,48 +2,54 @@ package provider
 
 import (
 	"context"
+	"fmt"
+	"strconv"
 
 	gitpod "github.com/gitpod-io/gitpod-sdk-go"
 	"github.com/gitpod-io/gitpod-sdk-go/shared"
-	"github.com/hashicorp/terraform-plugin-framework/attr"
-	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/boolplanmodifier"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/mapplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
 var (
-	_ resource.Resource                = &runnerEnvironmentClassesResource{}
-	_ resource.ResourceWithImportState = &runnerEnvironmentClassesResource{}
+	_ resource.Resource                = &runnerEnvironmentClassResource{}
+	_ resource.ResourceWithImportState = &runnerEnvironmentClassResource{}
 )
 
-type runnerEnvironmentClassesResource struct {
+type runnerEnvironmentClassResource struct {
 	client *gitpod.Client
 }
 
-func NewRunnerEnvironmentClassesResource() resource.Resource {
-	return &runnerEnvironmentClassesResource{}
+func NewRunnerEnvironmentClassResource() resource.Resource {
+	return &runnerEnvironmentClassResource{}
 }
 
-type runnerEnvironmentClassesModel struct {
-	ID            types.String `tfsdk:"id"`
-	RunnerID      types.String `tfsdk:"runner_id"`
-	DisplayName   types.String `tfsdk:"display_name"`
-	Description   types.String `tfsdk:"description"`
-	Configuration types.Map    `tfsdk:"configuration"`
-	Enabled       types.Bool   `tfsdk:"enabled"`
+type runnerEnvironmentClassModel struct {
+	ID            types.String                              `tfsdk:"id"`
+	RunnerID      types.String                              `tfsdk:"runner_id"`
+	DisplayName   types.String                              `tfsdk:"display_name"`
+	Description   types.String                              `tfsdk:"description"`
+	Configuration *runnerEnvironmentClassConfigurationModel `tfsdk:"configuration"`
+	Enabled       types.Bool                                `tfsdk:"enabled"`
 }
 
-func (r *runnerEnvironmentClassesResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
-	resp.TypeName = req.ProviderTypeName + "_runner_environment_classes"
+type runnerEnvironmentClassConfigurationModel struct {
+	InstanceType types.String `tfsdk:"instance_type"`
+	DiskSizeGB   types.Int64  `tfsdk:"disk_size_gb"`
+	Spot         types.Bool   `tfsdk:"spot"`
 }
 
-func (r *runnerEnvironmentClassesResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
+func (r *runnerEnvironmentClassResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
+	resp.TypeName = req.ProviderTypeName + "_runner_environment_class"
+}
+
+func (r *runnerEnvironmentClassResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		MarkdownDescription: `Manages an environment class on a Gitpod runner.
 
@@ -71,18 +77,28 @@ func (r *runnerEnvironmentClassesResource) Schema(_ context.Context, _ resource.
 				MarkdownDescription: "Human-readable environment class description.",
 				PlanModifiers:       []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 			},
-			"configuration": schema.MapAttribute{
-				ElementType: types.StringType,
-				Required:    true,
-				MarkdownDescription: `Configuration values keyed by configuration name. Changing this requires replacement.
-
-  Valid keys for both AWS EC2 and Managed runners:
-  - ` + "`instanceType`" + ` (required)
-  - ` + "`diskSizeGB`" + ` (optional)
-  - ` + "`spot`" + ` (optional)
-
-  **Note**: The API silently ignores invalid configuration keys.`,
-				PlanModifiers: []planmodifier.Map{mapplanmodifier.RequiresReplace()},
+			"configuration": schema.SingleNestedAttribute{
+				Required:            true,
+				MarkdownDescription: "Environment class configuration for AWS EC2 and Managed runners.",
+				Attributes: map[string]schema.Attribute{
+					"instance_type": schema.StringAttribute{
+						Required:            true,
+						MarkdownDescription: "AWS EC2 instance type (e.g., 'm6i.large', 't3.medium').",
+						PlanModifiers:       []planmodifier.String{stringplanmodifier.RequiresReplace()},
+					},
+					"disk_size_gb": schema.Int64Attribute{
+						Optional:            true,
+						Computed:            true,
+						MarkdownDescription: "Disk size in GB.",
+						PlanModifiers:       []planmodifier.Int64{int64planmodifier.UseStateForUnknown(), int64planmodifier.RequiresReplace()},
+					},
+					"spot": schema.BoolAttribute{
+						Optional:            true,
+						Computed:            true,
+						MarkdownDescription: "Use spot instances.",
+						PlanModifiers:       []planmodifier.Bool{boolplanmodifier.UseStateForUnknown(), boolplanmodifier.RequiresReplace()},
+					},
+				},
 			},
 			"enabled": schema.BoolAttribute{
 				Optional:            true,
@@ -94,7 +110,7 @@ func (r *runnerEnvironmentClassesResource) Schema(_ context.Context, _ resource.
 	}
 }
 
-func (r *runnerEnvironmentClassesResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
+func (r *runnerEnvironmentClassResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
 	client, ok := clientFromProviderData(req.ProviderData, &resp.Diagnostics)
 	if !ok {
 		return
@@ -103,32 +119,17 @@ func (r *runnerEnvironmentClassesResource) Configure(_ context.Context, req reso
 	r.client = client
 }
 
-func (r *runnerEnvironmentClassesResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
-	var plan runnerEnvironmentClassesModel
+func (r *runnerEnvironmentClassResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
+	var plan runnerEnvironmentClassModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	// Convert configuration map to key-value pairs
-	configMap := make(map[string]string)
-	resp.Diagnostics.Append(plan.Configuration.ElementsAs(ctx, &configMap, false)...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
-	configFields := make([]shared.FieldValueParam, 0, len(configMap))
-	for key, value := range configMap {
-		configFields = append(configFields, shared.FieldValueParam{
-			Key:   gitpod.F(key),
-			Value: gitpod.F(value),
-		})
-	}
-
 	params := gitpod.RunnerConfigurationEnvironmentClassNewParams{
 		RunnerID:      gitpod.F(plan.RunnerID.ValueString()),
 		DisplayName:   gitpod.F(plan.DisplayName.ValueString()),
-		Configuration: gitpod.F(configFields),
+		Configuration: gitpod.F(buildConfigurationFieldValues(plan.Configuration)),
 	}
 
 	if !plan.Description.IsNull() && !plan.Description.IsUnknown() {
@@ -150,17 +151,12 @@ func (r *runnerEnvironmentClassesResource) Create(ctx context.Context, req resou
 		return
 	}
 
-	state, diags := mapEnvironmentClassToModel(getResp.EnvironmentClass)
-	resp.Diagnostics.Append(diags...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
+	state := mapEnvironmentClassToModel(getResp.EnvironmentClass)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
-func (r *runnerEnvironmentClassesResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
-	var state runnerEnvironmentClassesModel
+func (r *runnerEnvironmentClassResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
+	var state runnerEnvironmentClassModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -179,23 +175,18 @@ func (r *runnerEnvironmentClassesResource) Read(ctx context.Context, req resourc
 		return
 	}
 
-	newState, diags := mapEnvironmentClassToModel(getResp.EnvironmentClass)
-	resp.Diagnostics.Append(diags...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
+	newState := mapEnvironmentClassToModel(getResp.EnvironmentClass)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &newState)...)
 }
 
-func (r *runnerEnvironmentClassesResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
-	var plan runnerEnvironmentClassesModel
+func (r *runnerEnvironmentClassResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
+	var plan runnerEnvironmentClassModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	var prior runnerEnvironmentClassesModel
+	var prior runnerEnvironmentClassModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &prior)...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -228,17 +219,12 @@ func (r *runnerEnvironmentClassesResource) Update(ctx context.Context, req resou
 		return
 	}
 
-	state, diags := mapEnvironmentClassToModel(getResp.EnvironmentClass)
-	resp.Diagnostics.Append(diags...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
+	state := mapEnvironmentClassToModel(getResp.EnvironmentClass)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
-func (r *runnerEnvironmentClassesResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
-	var state runnerEnvironmentClassesModel
+func (r *runnerEnvironmentClassResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
+	var state runnerEnvironmentClassModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -259,27 +245,80 @@ func (r *runnerEnvironmentClassesResource) Delete(ctx context.Context, req resou
 	}
 }
 
-func (r *runnerEnvironmentClassesResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
+func (r *runnerEnvironmentClassResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
 }
 
-func mapEnvironmentClassToModel(environmentClass gitpod.EnvironmentClass) (runnerEnvironmentClassesModel, diag.Diagnostics) {
-	var diags diag.Diagnostics
-
-	configurationValues := make(map[string]attr.Value, len(environmentClass.Configuration))
-	for _, field := range environmentClass.Configuration {
-		configurationValues[field.Key] = types.StringValue(field.Value)
+func buildConfigurationFieldValues(cfg *runnerEnvironmentClassConfigurationModel) []shared.FieldValueParam {
+	if cfg == nil {
+		return nil
 	}
 
-	configuration, configDiags := types.MapValue(types.StringType, configurationValues)
-	diags.Append(configDiags...)
+	fields := make([]shared.FieldValueParam, 0, 3)
 
-	return runnerEnvironmentClassesModel{
+	// instanceType is required
+	if !cfg.InstanceType.IsNull() && !cfg.InstanceType.IsUnknown() {
+		fields = append(fields, shared.FieldValueParam{
+			Key:   gitpod.F("instanceType"),
+			Value: gitpod.F(cfg.InstanceType.ValueString()),
+		})
+	}
+
+	// diskSizeGB is optional
+	if !cfg.DiskSizeGB.IsNull() && !cfg.DiskSizeGB.IsUnknown() {
+		fields = append(fields, shared.FieldValueParam{
+			Key:   gitpod.F("diskSizeGB"),
+			Value: gitpod.F(fmt.Sprintf("%d", cfg.DiskSizeGB.ValueInt64())),
+		})
+	}
+
+	// spot is optional
+	if !cfg.Spot.IsNull() && !cfg.Spot.IsUnknown() {
+		fields = append(fields, shared.FieldValueParam{
+			Key:   gitpod.F("spot"),
+			Value: gitpod.F(fmt.Sprintf("%t", cfg.Spot.ValueBool())),
+		})
+	}
+
+	return fields
+}
+
+func mapConfigurationToModel(fields []shared.FieldValue) *runnerEnvironmentClassConfigurationModel {
+	if len(fields) == 0 {
+		return nil
+	}
+
+	cfg := &runnerEnvironmentClassConfigurationModel{}
+
+	for _, field := range fields {
+		switch field.Key {
+		case "instanceType":
+			cfg.InstanceType = types.StringValue(field.Value)
+		case "diskSizeGB":
+			if val, err := strconv.ParseInt(field.Value, 10, 64); err == nil {
+				cfg.DiskSizeGB = types.Int64Value(val)
+			} else {
+				cfg.DiskSizeGB = types.Int64Null()
+			}
+		case "spot":
+			if val, err := strconv.ParseBool(field.Value); err == nil {
+				cfg.Spot = types.BoolValue(val)
+			} else {
+				cfg.Spot = types.BoolNull()
+			}
+		}
+	}
+
+	return cfg
+}
+
+func mapEnvironmentClassToModel(environmentClass gitpod.EnvironmentClass) runnerEnvironmentClassModel {
+	return runnerEnvironmentClassModel{
 		ID:            types.StringValue(environmentClass.ID),
 		RunnerID:      types.StringValue(environmentClass.RunnerID),
 		DisplayName:   stringValueOrNull(environmentClass.DisplayName),
 		Description:   stringValueOrNull(environmentClass.Description),
-		Configuration: configuration,
+		Configuration: mapConfigurationToModel(environmentClass.Configuration),
 		Enabled:       types.BoolValue(environmentClass.Enabled),
-	}, diags
+	}
 }
