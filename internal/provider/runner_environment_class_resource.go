@@ -142,6 +142,20 @@ func (r *runnerEnvironmentClassResource) Create(ctx context.Context, req resourc
 		return
 	}
 
+	// The API does not support setting enabled during creation.
+	// If the user specified enabled=false, update it after creation.
+	if !plan.Enabled.IsNull() && !plan.Enabled.IsUnknown() && !plan.Enabled.ValueBool() {
+		updateParams := gitpod.RunnerConfigurationEnvironmentClassUpdateParams{
+			EnvironmentClassID: gitpod.F(createResp.ID),
+			Enabled:            gitpod.F(false),
+		}
+		_, err = r.client.Runners.Configurations.EnvironmentClasses.Update(ctx, updateParams)
+		if err != nil {
+			resp.Diagnostics.AddError("Failed to set enabled state after create", err.Error())
+			return
+		}
+	}
+
 	// Create only returns ID; read back for full state.
 	getResp, err := r.client.Runners.Configurations.EnvironmentClasses.Get(ctx, gitpod.RunnerConfigurationEnvironmentClassGetParams{
 		EnvironmentClassID: gitpod.F(createResp.ID),
