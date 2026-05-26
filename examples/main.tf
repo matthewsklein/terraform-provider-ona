@@ -48,20 +48,6 @@ data "ona_runner_environment_classes" "example" {
   runner_id = ona_runner.example.id
 }
 
-resource "ona_runner_environment_class" "example" {
-  runner_id    = ona_runner.example.id
-  display_name = "CI Test Class"
-  description  = "Environment class created by CI integration test"
-
-  configuration = {
-    instance_type = "m6i.large"
-    disk_size_gb  = 50
-    spot          = false
-  }
-
-  enabled = true
-}
-
 data "ona_authenticated_identity" "current" {}
 
 resource "ona_project" "example" {
