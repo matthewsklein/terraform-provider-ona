@@ -11,6 +11,61 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestShouldReconcileDesiredPhase(t *testing.T) {
+	const created = gitpod.RunnerPhaseActive
+
+	t.Run("nil spec → no reconcile", func(t *testing.T) {
+		assert.False(t, shouldReconcileDesiredPhase(nil, created))
+	})
+
+	t.Run("null desired_phase → no reconcile", func(t *testing.T) {
+		assert.False(t, shouldReconcileDesiredPhase(&runnerSpecModel{DesiredPhase: types.StringNull()}, created))
+	})
+
+	t.Run("unknown desired_phase → no reconcile", func(t *testing.T) {
+		assert.False(t, shouldReconcileDesiredPhase(&runnerSpecModel{DesiredPhase: types.StringUnknown()}, created))
+	})
+
+	t.Run("matches created phase → no reconcile", func(t *testing.T) {
+		spec := &runnerSpecModel{DesiredPhase: types.StringValue("RUNNER_PHASE_ACTIVE")}
+		assert.False(t, shouldReconcileDesiredPhase(spec, created))
+	})
+
+	t.Run("differs from created phase → reconcile", func(t *testing.T) {
+		spec := &runnerSpecModel{DesiredPhase: types.StringValue("RUNNER_PHASE_INACTIVE")}
+		assert.True(t, shouldReconcileDesiredPhase(spec, created))
+	})
+}
+
+func TestManagedRunnerRejectsPhase(t *testing.T) {
+	managed := types.StringValue(string(gitpod.RunnerProviderManaged))
+	selfHosted := types.StringValue("RUNNER_PROVIDER_AWS_EC2")
+
+	t.Run("managed + INACTIVE → rejected", func(t *testing.T) {
+		assert.True(t, managedRunnerRejectsPhase(managed, types.StringValue("RUNNER_PHASE_INACTIVE")))
+	})
+
+	t.Run("managed + ACTIVE → allowed", func(t *testing.T) {
+		assert.False(t, managedRunnerRejectsPhase(managed, types.StringValue("RUNNER_PHASE_ACTIVE")))
+	})
+
+	t.Run("managed + null → allowed", func(t *testing.T) {
+		assert.False(t, managedRunnerRejectsPhase(managed, types.StringNull()))
+	})
+
+	t.Run("managed + unknown → allowed", func(t *testing.T) {
+		assert.False(t, managedRunnerRejectsPhase(managed, types.StringUnknown()))
+	})
+
+	t.Run("self-hosted + INACTIVE → allowed", func(t *testing.T) {
+		assert.False(t, managedRunnerRejectsPhase(selfHosted, types.StringValue("RUNNER_PHASE_INACTIVE")))
+	})
+
+	t.Run("unknown provider → allowed", func(t *testing.T) {
+		assert.False(t, managedRunnerRejectsPhase(types.StringUnknown(), types.StringValue("RUNNER_PHASE_INACTIVE")))
+	})
+}
+
 func TestStringValueOrNull(t *testing.T) {
 	t.Run("empty string becomes null", func(t *testing.T) {
 		got := stringValueOrNull("")

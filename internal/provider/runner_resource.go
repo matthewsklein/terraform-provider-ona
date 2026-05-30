@@ -16,8 +16,9 @@ import (
 )
 
 var (
-	_ resource.Resource                = &runnerResource{}
-	_ resource.ResourceWithImportState = &runnerResource{}
+	_ resource.Resource                   = &runnerResource{}
+	_ resource.ResourceWithImportState    = &runnerResource{}
+	_ resource.ResourceWithValidateConfig = &runnerResource{}
 )
 
 type runnerResource struct {
@@ -103,7 +104,7 @@ func (r *runnerResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 					"desired_phase": schema.StringAttribute{
 						Optional:            true,
 						Computed:            true,
-						MarkdownDescription: "Desired runner phase (e.g. `RUNNER_PHASE_ACTIVE`, `RUNNER_PHASE_INACTIVE`).  API always explicitly sets this to `RUNNER_PHASE_ACTIVE` on creation.",
+						MarkdownDescription: "Desired runner phase (e.g. `RUNNER_PHASE_ACTIVE`, `RUNNER_PHASE_INACTIVE`). The API starts every runner in `RUNNER_PHASE_ACTIVE`; the provider reconciles to the configured phase immediately after creation. Managed runners always run as `RUNNER_PHASE_ACTIVE` and reject phase changes.",
 						PlanModifiers:       []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 					},
 					"variant": schema.StringAttribute{
@@ -197,6 +198,23 @@ func (r *runnerResource) Configure(_ context.Context, req resource.ConfigureRequ
 	r.client = client
 }
 
+func (r *runnerResource) ValidateConfig(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
+	var cfg runnerModel
+	resp.Diagnostics.Append(req.Config.Get(ctx, &cfg)...)
+	if resp.Diagnostics.HasError() || cfg.Spec == nil {
+		return
+	}
+
+	if managedRunnerRejectsPhase(cfg.ProviderType, cfg.Spec.DesiredPhase) {
+		resp.Diagnostics.AddAttributeError(
+			path.Root("spec").AtName("desired_phase"),
+			"Unsupported desired_phase for managed runner",
+			"Managed runners always run as RUNNER_PHASE_ACTIVE and reject phase changes "+
+				"(the API returns 403). Remove desired_phase or set it to RUNNER_PHASE_ACTIVE.",
+		)
+	}
+}
+
 func (r *runnerResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var plan runnerModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
@@ -221,7 +239,45 @@ func (r *runnerResource) Create(ctx context.Context, req resource.CreateRequest,
 		return
 	}
 
-	state := mapRunnerToModel(createResp.Runner, plan)
+	// Once the runner exists, Create must never return without persisting state,
+	// or the remote runner is orphaned. createResp.Runner is the fallback used
+	// whenever a follow-up call fails.
+	runnerID := createResp.Runner.RunnerID
+	runner := createResp.Runner
+
+	// CreateRunner ignores the requested desired_phase and always starts the
+	// runner in RUNNER_PHASE_ACTIVE. If the config asks for a different phase,
+	// reconcile it with a follow-up Update so the final state matches the plan.
+	// This runs for both fresh creates and the create half of a replacement.
+	if shouldReconcileDesiredPhase(plan.Spec, createResp.Runner.Spec.DesiredPhase) {
+		if _, err = r.client.Runners.Update(ctx, gitpod.RunnerUpdateParams{
+			RunnerID: gitpod.F(runnerID),
+			Spec: gitpod.F(gitpod.RunnerUpdateParamsSpec{
+				DesiredPhase: gitpod.F(gitpod.RunnerPhase(plan.Spec.DesiredPhase.ValueString())),
+			}),
+		}); err != nil {
+			// Phase update rejected: persist the created runner so it is tracked
+			// (and can be destroyed) instead of orphaned, then surface the error.
+			state := mapRunnerToModel(runner, plan)
+			resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
+			resp.Diagnostics.AddError("Failed to set desired phase after create", err.Error())
+			return
+		}
+	}
+
+	// Read back to populate computed configuration fields (e.g. release_channel,
+	// log_level) the create response may omit, plus the reconciled phase. If the
+	// read fails, fall back to the create response so the runner is still tracked;
+	// computed fields reconcile on the next refresh.
+	if getResp, getErr := r.client.Runners.Get(ctx, gitpod.RunnerGetParams{
+		RunnerID: gitpod.F(runnerID),
+	}); getErr == nil {
+		runner = getResp.Runner
+	} else {
+		resp.Diagnostics.AddWarning("Could not read runner after create", getErr.Error())
+	}
+
+	state := mapRunnerToModel(runner, plan)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
@@ -361,6 +417,30 @@ func (r *runnerResource) ImportState(ctx context.Context, req resource.ImportSta
 }
 
 // Helpers
+
+// shouldReconcileDesiredPhase reports whether Create must issue a follow-up
+// Update to honor the configured desired_phase. CreateRunner always starts the
+// runner in RUNNER_PHASE_ACTIVE, so a known configured phase that differs from
+// the created one needs reconciling. A null/unknown phase needs nothing.
+func shouldReconcileDesiredPhase(plan *runnerSpecModel, created gitpod.RunnerPhase) bool {
+	if plan == nil || plan.DesiredPhase.IsNull() || plan.DesiredPhase.IsUnknown() {
+		return false
+	}
+	return plan.DesiredPhase.ValueString() != string(created)
+}
+
+// managedRunnerRejectsPhase reports whether the config requests a desired_phase
+// that a managed runner cannot accept. Managed runners always run as
+// RUNNER_PHASE_ACTIVE and reject phase updates (the API returns 403), so any
+// other explicit phase is invalid. Null/unknown values impose no constraint.
+func managedRunnerRejectsPhase(providerType, desiredPhase types.String) bool {
+	if providerType.IsNull() || providerType.IsUnknown() ||
+		desiredPhase.IsNull() || desiredPhase.IsUnknown() {
+		return false
+	}
+	return providerType.ValueString() == string(gitpod.RunnerProviderManaged) &&
+		desiredPhase.ValueString() != string(gitpod.RunnerPhaseActive)
+}
 
 func buildSpecParam(spec *runnerSpecModel) gitpod.RunnerSpecParam {
 	p := gitpod.RunnerSpecParam{}
