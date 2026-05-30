@@ -55,7 +55,7 @@ resource "ona_runner" "example" {
 Optional:
 
 - `configuration` (Attributes) (see [below for nested schema](#nestedatt--spec--configuration))
-- `desired_phase` (String) Desired runner phase (e.g. `RUNNER_PHASE_ACTIVE`, `RUNNER_PHASE_INACTIVE`).
+- `desired_phase` (String) Desired runner phase (e.g. `RUNNER_PHASE_ACTIVE`, `RUNNER_PHASE_INACTIVE`).  API always explicitly sets this to `RUNNER_PHASE_ACTIVE` on creation.
 - `variant` (String) Runner variant (`RUNNER_VARIANT_STANDARD`, `RUNNER_VARIANT_ENTERPRISE`).
 
 <a id="nestedatt--spec--configuration"></a>

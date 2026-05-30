@@ -98,11 +98,13 @@ func (r *runnerResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 			},
 			"spec": schema.SingleNestedAttribute{
 				Optional: true,
+				Computed: true,
 				Attributes: map[string]schema.Attribute{
 					"desired_phase": schema.StringAttribute{
 						Optional:            true,
 						Computed:            true,
-						MarkdownDescription: "Desired runner phase (e.g. `RUNNER_PHASE_ACTIVE`, `RUNNER_PHASE_INACTIVE`).",
+						MarkdownDescription: "Desired runner phase (e.g. `RUNNER_PHASE_ACTIVE`, `RUNNER_PHASE_INACTIVE`).  API always explicitly sets this to `RUNNER_PHASE_ACTIVE` on creation.",
+						PlanModifiers:       []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 					},
 					"variant": schema.StringAttribute{
 						Optional:            true,
@@ -219,16 +221,7 @@ func (r *runnerResource) Create(ctx context.Context, req resource.CreateRequest,
 		return
 	}
 
-	// Wait for the runner to reach its desired phase before reading state.
-	runnerID := createResp.Runner.RunnerID
-	desiredPhase := createResp.Runner.Spec.DesiredPhase
-	runner, err := r.waitForPhase(ctx, runnerID, desiredPhase)
-	if err != nil {
-		resp.Diagnostics.AddError("Runner did not become ready", err.Error())
-		return
-	}
-
-	state := mapRunnerToModel(*runner, plan)
+	state := mapRunnerToModel(createResp.Runner, plan)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
@@ -371,9 +364,6 @@ func (r *runnerResource) ImportState(ctx context.Context, req resource.ImportSta
 
 func buildSpecParam(spec *runnerSpecModel) gitpod.RunnerSpecParam {
 	p := gitpod.RunnerSpecParam{}
-	if !spec.DesiredPhase.IsNull() && !spec.DesiredPhase.IsUnknown() {
-		p.DesiredPhase = gitpod.F(gitpod.RunnerPhase(spec.DesiredPhase.ValueString()))
-	}
 	if !spec.Variant.IsNull() && !spec.Variant.IsUnknown() {
 		p.Variant = gitpod.F(gitpod.RunnerVariant(spec.Variant.ValueString()))
 	}
@@ -558,12 +548,16 @@ func mapRunnerToModel(runner gitpod.Runner, prior runnerModel) runnerModel {
 
 	m.RunnerManagerID = stringValueOrNull(runner.RunnerManagerID)
 
+	spec := &runnerSpecModel{
+		DesiredPhase: types.StringValue(string(runner.Spec.DesiredPhase)),
+	}
+
+	m.Spec = spec
+
 	// Map spec — preserve user-set values the API doesn't return
 	if prior.Spec != nil {
-		spec := &runnerSpecModel{
-			DesiredPhase: stringValueOrNull(string(runner.Spec.DesiredPhase)),
-			Variant:      stringValueOrNull(string(runner.Spec.Variant)),
-		}
+		spec.Variant = stringValueOrNull(string(runner.Spec.Variant))
+
 		if prior.Spec.Configuration != nil {
 			// auto_update: prefer prior state when explicitly set, as the API
 			// may ignore the value for certain runner types (e.g. managed).
@@ -605,7 +599,6 @@ func mapRunnerToModel(runner gitpod.Runner, prior runnerModel) runnerModel {
 			}
 			spec.Configuration = cfg
 		}
-		m.Spec = spec
 	}
 
 	m.Status = runnerStatusObjectValue(runner.Status)
